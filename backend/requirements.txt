@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+google-api-python-client
+google-auth
+firebase-admin
+# optional, only for the browser fallback mode:
+# playwright

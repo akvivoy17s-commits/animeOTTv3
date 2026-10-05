@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "992616813573",
+    "project_id": "animeapp-608c0",
+    "storage_bucket": "animeapp-608c0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:992616813573:android:bf30a483476174ebf4386c",
+        "android_client_info": {
+          "package_name": "com.example.anime_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "992616813573-fb6gem4dedhacceulhuvuqnv0cb3htnf.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDKjFr0Rk199DeoyON-keqQEMa2DM1Upz4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "992616813573-fb6gem4dedhacceulhuvuqnv0cb3htnf.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "992616813573-n85r7og0v9134jsg2dfm8hbla35augj5.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.animeApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

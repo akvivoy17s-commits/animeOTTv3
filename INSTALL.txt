@@ -1,0 +1,15 @@
+ANIME PORTAL - complete package (Flutter lib + FastAPI backend)
+
+1) Flutter:  replace project lib/ with this lib/   (pubspec needs: http)
+2) Backend:  use this backend/ folder (back up your old one first)
+     cd backend
+     pip install -r requirements.txt
+     copy .env.example to .env  ->  fill OPENROUTER_API_KEY and OPENROUTER_MODEL
+     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+   backend/ and lib/ must sit side by side (else set APP_LIB_DIR in .env)
+3) Flutter run:
+     flutter run -d chrome
+     real phone: flutter run --dart-define=AI_BASE_URL=http://<PC-IP>:8000
+4) Check: http://127.0.0.1:8000/health  and  http://127.0.0.1:8000/knowledge/status
+Release: python scanner/scan_app.py ../lib, then deploy; build with https AI_BASE_URL;
+         set ALLOWED_ORIGINS for web.
