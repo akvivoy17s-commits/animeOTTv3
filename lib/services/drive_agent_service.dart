@@ -85,4 +85,21 @@ class DriveAgentService {
     final r = await _call('POST', '/drive/retry-failed');
     return (r['reset'] as num?)?.toInt() ?? 0;
   }
+
+  /// Tell the Drive Agent that videos were deleted from the app so it forgets them
+  /// (they will show as new if detected again). Best-effort: never throws, because
+  /// the server also self-heals on the next Preview/Start.
+  static Future<void> forget(
+      {List<String> videoIds = const [], List<String> urls = const []}) async {
+    if (videoIds.isEmpty && urls.isEmpty) return;
+    const n = 500;
+    try {
+      for (var i = 0; i < videoIds.length || i < urls.length; i += n) {
+        await _call('POST', '/drive/forget', body: {
+          'video_ids': videoIds.skip(i).take(n).toList(),
+          'urls': urls.skip(i).take(n).toList(),
+        });
+      }
+    } catch (_) {}
+  }
 }

@@ -126,6 +126,13 @@ class RunManager:
                            "thumbnail_url": m.extra["thumbnail_url"] if "thumbnail_url" in m.extra else v.web_view_link}
                           for v, m, st in rows[:max_rows]]}
 
+    def forget(self, doc_ids: list[str], urls: list[str]) -> int:
+        store = StateStore(Config.load(validate=False).state_db, recover=False)
+        try:
+            return Agent(Config.load(validate=False), store=store).forget(doc_ids, urls)
+        finally:
+            store.close()
+
     def retry_failed(self) -> int:
         if self.running():
             raise Busy("A run is in progress.")

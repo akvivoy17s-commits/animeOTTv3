@@ -2,7 +2,9 @@
 from __future__ import annotations
 import re
 import time
+from functools import lru_cache
 from typing import Iterator
+from urllib.parse import urlparse
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -20,13 +22,49 @@ FIELDS = ("nextPageToken, files(id,name,mimeType,size,description,createdTime,"
 _ID_PATTERNS = (r"/folders/([\w-]{10,})", r"[?&]id=([\w-]{10,})", r"^([\w-]{20,})$")
 
 
-def extract_folder_id(url: str) -> str:
-    url = url.strip()
+_SHORT_HOSTS = ("share.google", "drive.app.goo.gl", "goo.gl")   # Drive "share" short links
+_UA = "Mozilla/5.0 (compatible; DriveAgent/1.0)"
+
+
+def _id_from_text(text: str) -> str | None:
     for p in _ID_PATTERNS:
-        m = re.search(p, url)
+        m = re.search(p, text)
         if m:
             return m.group(1)
-    raise ValueError(f"Cannot find a Drive folder id in: {url}")
+    return None
+
+
+@lru_cache(maxsize=64)
+def _resolve_short(url: str) -> str | None:
+    """Follow a share.google-style short link and pull the folder id out of the final URL / page."""
+    import urllib.request
+    from urllib.parse import unquote
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            final = unquote(r.geturl())
+            body = r.read(300_000).decode("utf-8", "ignore")
+    except Exception as e:                                    # network / HTTP error
+        log.warning("Could not resolve short link %s: %s", url, e)
+        return None
+    return _id_from_text(final) or _id_from_text(unquote(body).replace("\\u003d", "=").replace("\\/", "/"))
+
+
+def extract_folder_id(url: str) -> str:
+    url = url.strip()
+    fid = _id_from_text(url)
+    if fid:
+        return fid
+    host = (urlparse(url).netloc or "").lower()
+    if host in _SHORT_HOSTS:                                  # whitelist: never fetch arbitrary hosts
+        fid = _resolve_short(url)
+        if fid:
+            return fid
+        raise ValueError("Could not open that share link. Open the folder in Google Drive, "
+                         "tap Share > Copy link (drive.google.com/drive/folders/...) and paste that.")
+    if "/file/d/" in url:
+        raise ValueError("That is a FILE link. Paste the link of the FOLDER that contains the videos.")
+    raise ValueError("Paste a Google Drive FOLDER link (drive.google.com/drive/folders/...).")
 
 
 def file_url(file_id: str) -> str:

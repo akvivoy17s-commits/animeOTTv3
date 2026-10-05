@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../services/admin_service.dart';
+import '../services/drive_agent_service.dart';
 import '../ui/manage_ui.dart';
 import '../ui/media.dart';
 import '../ui/neo.dart';
@@ -251,6 +254,16 @@ class _ManageVideoPageState extends State<ManageVideoPage>
   // DELETE VIDEO
   // =========================================================
 
+  /// Video/Drive URLs stored on a video document (used to clear Drive Agent records).
+  List<String> _driveUrlsOf(Map<String, dynamic>? d) {
+    if (d == null) return const [];
+    return {
+      for (final k in const ['originalVideoUrl', 'videoUrl'])
+        if (d[k] is String && (d[k] as String).trim().isNotEmpty)
+          (d[k] as String).trim(),
+    }.toList();
+  }
+
   Future<void> deleteVideo(String videoId) async {
     try {
       final playlistsSnapshot = await _firestore.collection('playlists').get();
@@ -267,7 +280,13 @@ class _ManageVideoPageState extends State<ManageVideoPage>
         }
       }
 
+      final snap = await _firestore.collection('videos').doc(videoId).get();
+      final urls = _driveUrlsOf(snap.data());
+
       await _firestore.collection('videos').doc(videoId).delete();
+
+      // Drive Agent must forget this video too (best-effort, never blocks).
+      unawaited(DriveAgentService.forget(videoIds: [videoId], urls: urls));
 
       if (!mounted) return;
 
@@ -340,12 +359,27 @@ class _ManageVideoPageState extends State<ManageVideoPage>
 
       await flush(); // playlists are clean before any video disappears
 
+      // Collect Drive URLs first (docs vanish after the delete below).
+      final urls = <String>[];
+      final idList = ids.toList();
+      for (var i = 0; i < idList.length; i += 30) {
+        final q = await _firestore
+            .collection('videos')
+            .where(FieldPath.documentId, whereIn: idList.skip(i).take(30).toList())
+            .get();
+        for (final d in q.docs) {
+          urls.addAll(_driveUrlsOf(d.data()));
+        }
+      }
+
       for (final id in ids) {
         batch.delete(_firestore.collection('videos').doc(id));
         if (++ops >= 400) await flush();
       }
 
       await flush();
+
+      unawaited(DriveAgentService.forget(videoIds: idList, urls: urls));
 
       if (!mounted) return;
 

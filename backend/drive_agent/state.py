@@ -104,6 +104,36 @@ class StateStore:
     def mark_skipped(self, file_id: str, reason: str = "") -> None:
         self._update(file_id, status=Status.SKIPPED.value, error=reason[:500])
 
+    # -- forget (delete cleanup) ----------------------------------------------
+    def forget(self, file_ids: Iterable[str]) -> int:
+        """Remove EVERYTHING stored for these Drive files (id, url, metadata, edits, status, doc id).
+        After this the file is unknown to the agent => detected as 'new'. A running job is left alone."""
+        ids = [i for i in dict.fromkeys(file_ids) if i]
+        n = 0
+        for k in range(0, len(ids), 500):
+            chunk = ids[k:k + 500]
+            cur = self.db.execute(
+                f"DELETE FROM jobs WHERE file_id IN ({','.join('?' * len(chunk))}) AND status!='in_progress'", chunk)
+            n += cur.rowcount
+        self.db.commit()
+        if n:
+            log.info("Forgot %d video(s)", n)
+        return n
+
+    def file_ids_for_docs(self, doc_ids: Iterable[str]) -> list[str]:
+        ids = [i for i in dict.fromkeys(doc_ids) if i]
+        out: list[str] = []
+        for k in range(0, len(ids), 500):
+            chunk = ids[k:k + 500]
+            out += [r["file_id"] for r in self.db.execute(
+                f"SELECT file_id FROM jobs WHERE doc_id IN ({','.join('?' * len(chunk))})", chunk)]
+        return out
+
+    def done_docs(self) -> dict:
+        """file_id -> Firestore doc id, for every video the agent believes is saved."""
+        return {r["file_id"]: r["doc_id"] or f"drive_{r['file_id']}"
+                for r in self.db.execute("SELECT file_id, doc_id FROM jobs WHERE status='done'")}
+
     # -- maintenance / reporting ----------------------------------------------
     def recover_stale(self) -> int:
         cur = self.db.execute("UPDATE jobs SET status='pending', updated_at=? WHERE status='in_progress'", (_now(),))

@@ -1,4 +1,4 @@
-"""Admin-only REST API:  /drive/plan  /drive/start  /drive/stop  /drive/status  /drive/retry-failed"""
+"""Admin-only REST API:  /drive/plan  /drive/start  /drive/stop  /drive/status  /drive/retry-failed  /drive/forget"""
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
@@ -47,6 +47,11 @@ class StartReq(FolderReq):
     edits: dict[str, ItemEdit] = Field(default_factory=dict, max_length=5000)   # file_id -> edits
 
 
+class ForgetReq(BaseModel):
+    video_ids: list[str] = Field(default_factory=list, max_length=500)   # Firestore videos/{id}
+    urls: list[str] = Field(default_factory=list, max_length=500)        # videoUrl / originalVideoUrl
+
+
 def _bad(e: Exception):
     raise HTTPException(400, str(e)[:300])
 
@@ -80,6 +85,12 @@ def stop(_: dict = Depends(require_admin)):
 @router.get("/status")
 def status(_: dict = Depends(require_admin)):
     return manager.status()
+
+
+@router.post("/forget")
+def forget(req: ForgetReq, _: dict = Depends(require_admin)):
+    """Call after videos are deleted in the app: wipes their dedupe records so they show as new."""
+    return {"forgotten": manager.forget(req.video_ids, req.urls)}
 
 
 @router.post("/retry-failed")

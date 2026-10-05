@@ -73,11 +73,25 @@ class _DriveAgentPageState extends State<DriveAgentPage> {
     }
   }
 
+  /// Accepts: drive.google.com folder links (/folders/ID, ?id=ID, /drive/u/0/folders/ID),
+  /// share.google / drive.app.goo.gl short links (resolved by the backend), or a bare folder ID.
   bool _validUrl() {
     final u = _url.text.trim();
-    final ok = u.contains('drive.google.com') &&
+    final host = (Uri.tryParse(u)?.host ?? '').toLowerCase();
+    final isDrive = (host == 'drive.google.com' || host == 'docs.google.com') &&
         (u.contains('/folders/') || u.contains('id='));
-    if (!ok) _msg('Paste a Google Drive FOLDER link.', error: true);
+    final isShort = host == 'share.google' ||
+        host == 'drive.app.goo.gl' ||
+        host == 'goo.gl';
+    final isBareId = RegExp(r'^[\w-]{20,}$').hasMatch(u);
+    final ok = isDrive || isShort || isBareId;
+    if (!ok) {
+      _msg(
+          u.contains('/file/d/')
+              ? 'That is a FILE link. Paste the FOLDER link.'
+              : 'Paste a Google Drive FOLDER link.',
+          error: true);
+    }
     return ok;
   }
 
