@@ -297,7 +297,8 @@ class _HomeContentState extends State<_HomeContent> {
 
     final items = <_HomeItem>[
       for (final d in results[0].docs)
-        _HomeItem(id: d.id, isMovie: true, data: d.data()),
+        if (d.data()['released'] != false)
+          _HomeItem(id: d.id, isMovie: true, data: d.data()),
       for (final d in results[1].docs)
         _HomeItem(id: d.id, isMovie: false, data: d.data()),
     ];

@@ -55,7 +55,7 @@ class _SearchPageState extends State<SearchPage> {
       setState(() {
         _videos = res[0].docs.where((d) {
           final cat = (d.data()['category'] ?? '').toString().trim().toLowerCase();
-          return cat == 'movies';
+          return cat == 'movies' && d.data()['released'] != false;
         }).toList();
         _playlists = res[1].docs;
         _loading = false;

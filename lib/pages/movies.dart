@@ -55,7 +55,8 @@ class _MoviesPageState extends State<MoviesPage> {
           .get();
       if (!mounted) return;
       setState(() {
-        _all = snap.docs;
+        // hide movies that are not released yet (old docs have no field = released)
+        _all = snap.docs.where((d) => d.data()['released'] != false).toList();
         _shown = _pageSize;
         _loading = false;
       });

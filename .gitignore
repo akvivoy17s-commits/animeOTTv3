@@ -12,6 +12,19 @@
 .swiftpm/
 migrate_working_dir/
 
+# Secrets
+.env
+*.env
+serviceAccount.json
+*serviceAccount*.json
+
+# Python backend
+venv/
+.venv/
+__pycache__/
+data/
+logs/
+
 # IntelliJ related
 *.iml
 *.ipr

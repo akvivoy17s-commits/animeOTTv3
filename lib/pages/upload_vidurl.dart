@@ -367,6 +367,11 @@ class _UploadVideoUrlPageState extends State<UploadVideoUrlPage> {
         videoData['episodes'] = episodes;
       }
 
+      // Movies stay hidden until released from Manage Videos.
+      if (category == 'movies') {
+        videoData['released'] = false;
+      }
+
       // ========================================================
       // SEASON
       //

@@ -16,8 +16,8 @@ class ApiConfig {
     }
     if (kReleaseMode) return null; // never fall back to localhost in release
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000'; // Android emulator -> host PC
+      return 'https://animeottv3.onrender.com'; // Android emulator -> host PC
     }
-    return 'http://127.0.0.1:8000';
+    return 'https://animeottv3.onrender.com';
   }
 }
