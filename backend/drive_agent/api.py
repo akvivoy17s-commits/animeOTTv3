@@ -64,6 +64,23 @@ def plan(req: FolderReq, user: dict = Depends(require_admin)):
         _bad(e)
 
 
+@router.post("/plan/start")
+def plan_start(req: FolderReq, user: dict = Depends(require_admin)):
+    try:
+        manager.plan_start(req.folder_url, req.category, user)
+    except Busy as e:
+        raise HTTPException(409, str(e))
+    except (ValueError, RuntimeError) as e:
+        _bad(e)
+    return {"ok": True}
+
+
+@router.get("/plan/result")
+def plan_result(_: dict = Depends(require_admin)):
+    r = manager.plan_result()
+    return {"state": r["state"], "error": r["error"], "result": r["result"] if r["state"] == "done" else None}
+
+
 @router.post("/start")
 def start(req: StartReq, user: dict = Depends(require_admin)):
     try:
