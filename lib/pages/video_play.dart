@@ -56,6 +56,25 @@ class _VideoPlayPageState extends State<VideoPlayPage>
 
   double _playbackSpeed = 1.0;
 
+  // Multi-language (Tamil / English / Japanese only)
+  static const List<String> _langOrder = ['tamil', 'english', 'japanese'];
+  static const Map<String, String> _langLabel = {
+    'tamil': 'TAMIL',
+    'english': 'ENGLISH',
+    'japanese': 'JAPANESE',
+  };
+  static const Map<String, String> _langShort = {
+    'tamil': 'TA',
+    'english': 'EN',
+    'japanese': 'JA',
+  };
+  Map<String, String> _langUrls = {}; // language -> video url
+  Map<String, String> _audioTracks = {}; // language -> audio track id (same file)
+  Set<String> get _availLangs => {..._langUrls.keys, ..._audioTracks.keys};
+  String _trackDebug = 'Audio tracks not loaded yet.';
+  String _activeLang = '';
+  bool _switchingLang = false;
+
   // More Videos
   List<DocumentSnapshot<Map<String, dynamic>>> _moreVideos = [];
   bool _moreVideosLoaded = false;
@@ -123,6 +142,10 @@ class _VideoPlayPageState extends State<VideoPlayPage>
       _season = '';
       _episode = '';
       _videoUrl = '';
+      _langUrls = {};
+      _audioTracks = {};
+      _activeLang = '';
+      _switchingLang = false;
       _moreVideos = [];
       _moreVideosLoaded = false;
     });
@@ -228,6 +251,8 @@ class _VideoPlayPageState extends State<VideoPlayPage>
       // ----------------------------------------------------------
 
       _loadMoreVideosInBackground();
+      _loadLanguages(data);
+      _loadAudioTracks();
     } catch (e) {
       debugPrint('VIDEO PAGE LOAD ERROR: $e');
 
@@ -357,7 +382,7 @@ class _VideoPlayPageState extends State<VideoPlayPage>
   // INITIALIZE VIDEO
   // ============================================================
 
-  Future<void> _initializeVideo(String originalUrl) async {
+  Future<void> _initializeVideo(String originalUrl, {Duration? resumeAt}) async {
     final candidates = _buildVideoCandidates(originalUrl);
 
     if (candidates.isEmpty) {
@@ -380,7 +405,7 @@ class _VideoPlayPageState extends State<VideoPlayPage>
         await testController.setPlaybackSpeed(_playbackSpeed);
 
         // Resume from saved position (Continue Watching)
-        final startAt = widget.startAt;
+        final startAt = resumeAt ?? widget.startAt;
         if (startAt != null &&
             startAt > Duration.zero &&
             startAt < testController.value.duration) {
@@ -414,6 +439,282 @@ class _VideoPlayPageState extends State<VideoPlayPage>
       'Google Drive video could not be loaded.\n\n'
       'Please check that the Drive file is accessible '
       'with the link.',
+    );
+  }
+
+
+  // ============================================================
+  // MULTI-LANGUAGE
+  // ============================================================
+
+  /// 'tamil' | 'english' | 'japanese' | null (anything else is ignored).
+  String? _normLang(String raw, {bool allowShort = false}) {
+    final t = raw.toLowerCase();
+    if (RegExp(r'tamil|தமிழ்|\btam\b').hasMatch(t)) return 'tamil';
+    if (RegExp(r'english|\beng\b').hasMatch(t)) return 'english';
+    if (RegExp(r'japanese|\bjpn\b|\bjap\b').hasMatch(t)) return 'japanese';
+    if (allowShort) {
+      final c = t.trim();
+      if (c == 'ta') return 'tamil';
+      if (c == 'en') return 'english';
+      if (c == 'ja' || c == 'jp') return 'japanese';
+    }
+    return null;
+  }
+
+  String? _detectLang(Map<String, dynamic> d) {
+    final explicit = _readString(d, [
+      'language',
+      'lang',
+      'audioLanguage',
+      'audio',
+    ]);
+    if (explicit.isNotEmpty) {
+      final l = _normLang(explicit, allowShort: true);
+      if (l != null) return l;
+    }
+    return _normLang(_readString(d, ['title', 'name', 'videoTitle']));
+  }
+
+  String _groupKey(Map<String, dynamic> d) {
+    final explicit = _readString(d, ['langGroup', 'groupId']);
+    if (explicit.isNotEmpty) return 'g|$explicit';
+    final base = _readString(d, ['title', 'name', 'videoTitle'])
+        .toLowerCase()
+        .replaceAll(
+          RegExp(r'tamil|தமிழ்|english|japanese|\b(tam|eng|jpn|jap|dub|dubbed)\b'),
+          ' ',
+        )
+        .replaceAll(RegExp(r'[^a-z0-9\u0B80-\u0BFF]+'), ' ')
+        .trim();
+    final season = _readString(d, ['season', 'seasonNumber']);
+    final ep = _getEpisodeNumber(d);
+    return '${_readString(d, ['category'])}|$season|$ep|$base';
+  }
+
+  Future<void> _loadLanguages(Map<String, dynamic> data) async {
+    final id = widget.videoId;
+    final found = <String, String>{};
+    final curLang = _detectLang(data);
+
+    // (a) one doc holding several urls:  languages: { tamil: url, ... }
+    final map = data['languages'];
+    if (map is Map) {
+      map.forEach((k, v) {
+        final l = _normLang(k.toString(), allowShort: true);
+        final u = v?.toString().trim() ?? '';
+        if (l != null && u.isNotEmpty) found[l] = u;
+      });
+    }
+
+    // (b) separate docs of the same episode, one per language
+    try {
+      final snap = await FirebaseFirestore.instance.collection('videos').get();
+      final key = _groupKey(data);
+      for (final d in snap.docs) {
+        if (d.id == id) continue;
+        final dd = d.data();
+        if (_groupKey(dd) != key) continue;
+        final l = _detectLang(dd);
+        final u = _readString(dd, ['videoUrl', 'url', 'videoURL']);
+        if (l != null && u.isNotEmpty) found.putIfAbsent(l, () => u);
+      }
+    } catch (e) {
+      debugPrint('LANGUAGE LOOKUP ERROR: $e');
+    }
+
+    if (curLang != null) found[curLang] = _videoUrl;
+
+    if (!mounted || id != widget.videoId) return;
+    // Only ONE language available -> no switcher at all.
+    if (found.length < 2) return;
+    setState(() {
+      _langUrls = found;
+      if (_activeLang.isEmpty) _activeLang = curLang ?? '';
+    });
+  }
+
+  String? _langFromCode(String raw) {
+    final c = raw.toLowerCase().trim().split(RegExp(r'[-_]')).first;
+    if (const ['ta', 'tam', 'tamil'].contains(c)) return 'tamil';
+    if (const ['en', 'eng', 'english'].contains(c)) return 'english';
+    if (const ['ja', 'jp', 'jpn', 'jap', 'japanese'].contains(c)) {
+      return 'japanese';
+    }
+    return null;
+  }
+
+  /// Languages stored as audio tracks INSIDE the video file (multi-audio).
+  Future<void> _loadAudioTracks({bool retry = true}) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    try {
+      if (!c.isAudioTrackSupportAvailable()) {
+        _trackDebug = 'Audio track API NOT supported on this platform.';
+        return;
+      }
+      final tracks = await c.getAudioTracks();
+      _trackDebug = tracks.isEmpty
+          ? 'No audio tracks reported by the player.'
+          : tracks
+              .map((t) =>
+                  'id=${t.id} | lang=${t.language} | label=${t.label} | selected=${t.isSelected}')
+              .join('\n');
+      debugPrint('AUDIO TRACKS:\n$_trackDebug');
+      final map = <String, String>{};
+      var sel = '';
+      for (final t in tracks) {
+        final code = '${t.language}'.trim().toLowerCase();
+        final hasCode = code.isNotEmpty && code != 'null' && code != 'und';
+        // Language code wins; label is used only when there is no code.
+        final l = hasCode ? _langFromCode(code) : _normLang('${t.label}');
+        if (l == null) continue;
+        map.putIfAbsent(l, () => t.id.toString());
+        if (t.isSelected) sel = l;
+      }
+      if (!mounted || !identical(c, _controller)) return;
+      if (map.isEmpty && retry) {
+        await Future.delayed(const Duration(seconds: 2));
+        return _loadAudioTracks(retry: false);
+      }
+      // Playing track is not Tamil/English/Japanese (e.g. Hindi) -> switch to
+      // the first supported one so audio and highlighted chip match.
+      if (sel.isEmpty && map.length >= 2) {
+        final pick = _langOrder.firstWhere(map.containsKey);
+        try {
+          await c.selectAudioTrack(map[pick]!);
+          sel = pick;
+        } catch (e) {
+          debugPrint('AUTO AUDIO SELECT ERROR: $e');
+        }
+      }
+      if (!mounted || !identical(c, _controller)) return;
+      setState(() {
+        _audioTracks = map;
+        if (sel.isNotEmpty) _activeLang = sel;
+      });
+    } catch (e) {
+      debugPrint('AUDIO TRACK ERROR: $e');
+    }
+  }
+
+  Future<void> _switchLanguage(String lang) async {
+    if (lang == _activeLang || _switchingLang) return;
+
+    // Same file, different audio track -> instant switch, no reload.
+    final trackId = _audioTracks[lang];
+    if (trackId != null && _controller != null) {
+      try {
+        await _controller!.selectAudioTrack(trackId);
+        if (mounted) setState(() => _activeLang = lang);
+      } catch (e) {
+        debugPrint('AUDIO SWITCH ERROR: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_langLabel[lang]} audio not available.')),
+          );
+        }
+      }
+      return;
+    }
+
+    final url = _langUrls[lang];
+    if (url == null) return;
+
+    final old = _controller;
+    final pos = old?.value.position ?? Duration.zero;
+    final wasPlaying = old?.value.isPlaying ?? true;
+
+    setState(() => _switchingLang = true);
+    old?.removeListener(_videoListener);
+    await old?.pause();
+
+    try {
+      await _initializeVideo(url, resumeAt: pos); // sets _controller on success
+      if (!mounted) return;
+      if (!identical(_controller, old)) {
+        await old?.dispose();
+        if (!wasPlaying) await _controller?.pause();
+        _videoUrl = url;
+        _activeLang = lang;
+        _audioTracks = {};
+        _loadAudioTracks();
+      }
+    } catch (e) {
+      debugPrint('LANGUAGE SWITCH ERROR: $e');
+      if (!mounted) return;
+      _controller = old;
+      old?.addListener(_videoListener);
+      if (wasPlaying) await old?.play();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${_langLabel[lang]} video could not be loaded.'),
+        ),
+      );
+    }
+
+    if (mounted) setState(() => _switchingLang = false);
+  }
+
+  void _showTrackDebug() {
+    showNeoSheet<void>(
+      context,
+      title: 'Audio tracks (debug)',
+      sub: 'RAW',
+      child: SelectableText(
+        _trackDebug,
+        style: const TextStyle(
+          color: Neo.text,
+          fontFamily: Neo.mono,
+          fontSize: 12,
+          height: 1.5,
+        ),
+      ),
+    );
+  }
+
+  void _showLanguages() {
+    showNeoSheet<void>(
+      context,
+      title: 'Language',
+      sub: 'AUDIO',
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final l in _langOrder)
+            if (_availLangs.contains(l)) _langChip(l, closeSheet: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _langChip(String lang, {bool closeSheet = false}) {
+    final selected = lang == _activeLang;
+    final color = selected ? Neo.cyan : Neo.muted;
+    return GestureDetector(
+      onTap: () {
+        if (closeSheet) Navigator.pop(context);
+        _switchLanguage(lang);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: selected ? 0.18 : 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.6)),
+        ),
+        child: Text(
+          _langLabel[lang]!,
+          style: TextStyle(
+            color: color,
+            fontFamily: Neo.mono,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
     );
   }
 
@@ -632,6 +933,15 @@ class _VideoPlayPageState extends State<VideoPlayPage>
             playbackSpeed: _playbackSpeed,
             hasPrev: _prevId != null,
             hasNext: _nextId != null,
+            langs: [
+              for (final l in _langOrder)
+                if (_availLangs.contains(l)) l,
+            ],
+            activeLang: _activeLang,
+            audioLangs: _audioTracks.keys.toSet(),
+            langLabels: _langLabel,
+            langShort: _langShort,
+            onAudioSwitch: _switchLanguage,
           );
         },
       ),
@@ -643,6 +953,13 @@ class _VideoPlayPageState extends State<VideoPlayPage>
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+
+    if (result != null && result.startsWith('lang:')) {
+      // Language lives in a different video file -> switch, then re-enter fullscreen.
+      await _switchLanguage(result.substring(5));
+      if (mounted) _openFullscreen();
+      return;
+    }
 
     if (result == 'prev') _goToVideo(_prevId);
     if (result == 'next') _goToVideo(_nextId);
@@ -718,6 +1035,14 @@ class _VideoPlayPageState extends State<VideoPlayPage>
               child: _buildVideoControls(),
             ),
           ),
+
+          if (_switchingLang)
+            const ColoredBox(
+              color: Color(0x88000000),
+              child: Center(
+                child: CircularProgressIndicator(color: Neo.cyan),
+              ),
+            ),
         ],
       ),
     );
@@ -912,6 +1237,42 @@ class _VideoPlayPageState extends State<VideoPlayPage>
                         ),
                       ),
                       const Spacer(),
+                      if (_availLangs.length >= 2)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: GestureDetector(
+                            onTap: _showLanguages,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Neo.violet.withValues(alpha: 0.6),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.translate_rounded,
+                                      size: 14, color: Neo.violet),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    _langShort[_activeLang] ?? 'LANG',
+                                    style: const TextStyle(
+                                      color: Neo.violet,
+                                      fontFamily: Neo.mono,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       GestureDetector(
                         onTap: _showSettings,
                         child: Container(
@@ -1440,15 +1801,18 @@ class _VideoPlayPageState extends State<VideoPlayPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            _title,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Neo.text,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              height: 1.2,
+          GestureDetector(
+            onLongPress: _showTrackDebug, // long-press title = raw audio track list
+            child: Text(
+              _title,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Neo.text,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -1461,6 +1825,20 @@ class _VideoPlayPageState extends State<VideoPlayPage>
               _infoChip('SPEED ${_fmtSpeed(_playbackSpeed)}', Neo.amber),
             ],
           ),
+          if (_availLangs.length >= 2) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Icon(Icons.translate_rounded,
+                    size: 16, color: Neo.violet),
+                for (final l in _langOrder)
+                  if (_availLangs.contains(l)) _langChip(l),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -1538,11 +1916,23 @@ class _FullscreenVideoPage extends StatefulWidget {
   final double playbackSpeed;
   final bool hasPrev;
   final bool hasNext;
+  final List<String> langs;
+  final String activeLang;
+  final Set<String> audioLangs;
+  final Map<String, String> langLabels;
+  final Map<String, String> langShort;
+  final Future<void> Function(String) onAudioSwitch;
 
   const _FullscreenVideoPage({
     required this.controller,
     required this.title,
     required this.playbackSpeed,
+    required this.langs,
+    required this.activeLang,
+    required this.audioLangs,
+    required this.langLabels,
+    required this.langShort,
+    required this.onAudioSwitch,
     this.hasPrev = false,
     this.hasNext = false,
   });
@@ -1555,6 +1945,7 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
   bool _showControls = true;
 
   late double _speed;
+  late String _lang;
 
   // ============================================================
   // INIT
@@ -1565,6 +1956,7 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
     super.initState();
 
     _speed = widget.playbackSpeed;
+    _lang = widget.activeLang;
 
     widget.controller.addListener(_videoListener);
   }
@@ -1693,6 +2085,56 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
                 if (!mounted) return;
                 Navigator.pop(context);
               },
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showLanguageSheet() {
+    showNeoSheet<void>(
+      context,
+      title: 'Language',
+      sub: 'AUDIO',
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final l in widget.langs)
+            GestureDetector(
+              onTap: () async {
+                Navigator.pop(context); // close sheet
+                if (l == _lang) return;
+                if (widget.audioLangs.contains(l)) {
+                  await widget.onAudioSwitch(l); // same file, instant
+                  if (mounted) setState(() => _lang = l);
+                } else {
+                  Navigator.pop(context, 'lang:$l'); // other file -> parent
+                }
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: (l == _lang ? Neo.cyan : Neo.muted)
+                      .withValues(alpha: l == _lang ? 0.18 : 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: (l == _lang ? Neo.cyan : Neo.muted)
+                        .withValues(alpha: 0.6),
+                  ),
+                ),
+                child: Text(
+                  widget.langLabels[l]!,
+                  style: TextStyle(
+                    color: l == _lang ? Neo.cyan : Neo.muted,
+                    fontFamily: Neo.mono,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
             ),
         ],
       ),
@@ -1922,6 +2364,41 @@ class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
                                   ),
                                 ),
                                 const Spacer(),
+                                if (widget.langs.length >= 2) ...[
+                                  GestureDetector(
+                                    onTap: _showLanguageSheet,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color:
+                                              Neo.violet.withValues(alpha: 0.6),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.translate_rounded,
+                                              size: 15, color: Neo.violet),
+                                          const SizedBox(width: 5),
+                                          Text(
+                                            widget.langShort[_lang] ?? 'LANG',
+                                            style: const TextStyle(
+                                              color: Neo.violet,
+                                              fontFamily: Neo.mono,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                ],
                                 GestureDetector(
                                   onTap: _showSpeedSettings,
                                   child: Container(
